@@ -25,8 +25,10 @@ import {
   Bell,
   Lock,
   Unlock,
-  Search
+  Search,
+  Trash2
 } from 'lucide-react';
+import { DeleteQuestionSetModal } from './DeleteQuestionSetModal.tsx';
 
 interface TeacherDashboardViewProps {
   questionSets: QuestionSet[];
@@ -44,6 +46,7 @@ interface TeacherDashboardViewProps {
   onBackToSetsList: () => void;
   onExportSetCSV: (set: QuestionSet, sessions: StudentSession[]) => void;
   onReopenStudentSession: (sessionId: string) => Promise<void>;
+  onDeleteSet: (setId: string) => Promise<void>;
   activeTeacherTab?: 'sets' | 'submissions';
   onTeacherTabChange?: (tab: 'sets' | 'submissions') => void;
 }
@@ -64,6 +67,7 @@ export const TeacherDashboardView: React.FC<TeacherDashboardViewProps> = ({
   onBackToSetsList,
   onExportSetCSV,
   onReopenStudentSession,
+  onDeleteSet,
   activeTeacherTab = 'sets',
   onTeacherTabChange
 }) => {
@@ -77,6 +81,14 @@ export const TeacherDashboardView: React.FC<TeacherDashboardViewProps> = ({
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
   const [confirmingRegenSetId, setConfirmingRegenSetId] = useState<string | null>(null);
   const [isRegeneratingSetId, setIsRegeneratingSetId] = useState<string | null>(null);
+  const [setToDelete, setSetToDelete] = useState<QuestionSet | null>(null);
+
+  const getSetSubmissionCount = (targetSet: QuestionSet) => {
+    const matching = allSessions.filter((s) => s.setId === targetSet.id);
+    if (matching.length > 0) return matching.length;
+    if (selectedSet?.id === targetSet.id && setSessions.length > 0) return setSessions.length;
+    return targetSet.submissionCount || 0;
+  };
 
   const handleCopyCode = (code: string, id: string) => {
     navigator.clipboard.writeText(code);
@@ -189,6 +201,15 @@ export const TeacherDashboardView: React.FC<TeacherDashboardViewProps> = ({
             >
               <Download className="w-3.5 h-3.5" />
               Export CSV
+            </button>
+
+            <button
+              onClick={() => setSetToDelete(selectedSet)}
+              className="h-9 px-3 rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+              title="Delete this question set"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Set</span>
             </button>
           </div>
         </div>
@@ -407,6 +428,19 @@ export const TeacherDashboardView: React.FC<TeacherDashboardViewProps> = ({
             </table>
           </div>
         </div>
+
+        <DeleteQuestionSetModal
+          isOpen={!!setToDelete}
+          onClose={() => setSetToDelete(null)}
+          onConfirm={async () => {
+            if (setToDelete) {
+              await onDeleteSet(setToDelete.id);
+              setSetToDelete(null);
+            }
+          }}
+          questionSet={setToDelete}
+          submissionCount={setToDelete ? getSetSubmissionCount(setToDelete) : 0}
+        />
       </div>
     );
   }
@@ -929,6 +963,15 @@ export const TeacherDashboardView: React.FC<TeacherDashboardViewProps> = ({
                       </>
                     )}
                   </button>
+                  <span>·</span>
+                  <button
+                    onClick={() => setSetToDelete(set)}
+                    className="inline-flex items-center gap-1 font-medium text-[var(--mut)] hover:text-red-600 dark:hover:text-red-400 transition-colors cursor-pointer"
+                    title="Delete question set"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Delete</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -949,6 +992,19 @@ export const TeacherDashboardView: React.FC<TeacherDashboardViewProps> = ({
           </div>
         )}
       </div>
+
+      <DeleteQuestionSetModal
+        isOpen={!!setToDelete}
+        onClose={() => setSetToDelete(null)}
+        onConfirm={async () => {
+          if (setToDelete) {
+            await onDeleteSet(setToDelete.id);
+            setSetToDelete(null);
+          }
+        }}
+        questionSet={setToDelete}
+        submissionCount={setToDelete ? getSetSubmissionCount(setToDelete) : 0}
+      />
     </div>
   );
 };

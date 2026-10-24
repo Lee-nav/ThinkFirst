@@ -6,7 +6,8 @@ import {
   getDoc,
   getDocs,
   setDoc,
-  updateDoc
+  updateDoc,
+  deleteDoc
 } from 'firebase/firestore';
 import { QuestionSet, StudentSession, FocusEvent } from '../types/index.ts';
 import { normalizeAccessCode } from '../utils/rules.ts';
@@ -441,5 +442,44 @@ export const firestoreService = {
       const docRef = doc(firestoreDb, 'studentSessions', sessionId, 'focusEvents', event.id);
       await setDoc(docRef, event);
     } catch {}
+  },
+
+  /**
+   * Delete a question set permanently
+   */
+  async deleteQuestionSet(setId: string): Promise<void> {
+    const current = getCachedSets();
+    const updated = current.filter((s) => s.id !== setId);
+    saveCachedSets(updated);
+
+    if (firestoreDb) {
+      try {
+        const docRef = doc(firestoreDb, 'questionSets', setId);
+        await deleteDoc(docRef);
+      } catch (err) {
+        console.warn('[ThinkFirst] Firestore deleteQuestionSet fallback to local:', err);
+      }
+    }
+  },
+
+  /**
+   * Delete all student sessions associated with a question set
+   */
+  async deleteSessionsForSet(setId: string): Promise<number> {
+    const current = getCachedSessions();
+    const toDelete = current.filter((s) => s.setId === setId);
+    const updated = current.filter((s) => s.setId !== setId);
+    saveCachedSessions(updated);
+
+    if (firestoreDb) {
+      try {
+        const deletePromises = toDelete.map((s) => deleteDoc(doc(firestoreDb, 'studentSessions', s.id)));
+        await Promise.all(deletePromises);
+      } catch (err) {
+        console.warn('[ThinkFirst] Firestore deleteSessionsForSet fallback to local:', err);
+      }
+    }
+
+    return toDelete.length;
   }
 };

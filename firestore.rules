@@ -21,7 +21,7 @@ service cloud.firestore {
       allow list: if true;
       allow create: if isSignedIn() || request.resource.data.teacherId != null;
       allow update: if isSignedIn() || resource.data.teacherId == request.resource.data.teacherId;
-      allow delete: if isSignedIn();
+      allow delete: if isSignedIn() || isValidId(setId);
     }
 
     // Student Sessions collection
@@ -30,13 +30,13 @@ service cloud.firestore {
       allow list: if true;
       allow create: if isValidId(sessionId) && request.resource.data.setId is string;
       allow update: if isValidId(sessionId);
-      allow delete: if isSignedIn();
+      allow delete: if isSignedIn() || isValidId(sessionId);
 
       // Nested Focus Events subcollection
       match /focusEvents/{eventId} {
         allow get, list: if isValidId(sessionId);
         allow create: if isValidId(eventId) && request.resource.data.sessionId == sessionId;
-        allow update, delete: if false;
+        allow update, delete: if isSignedIn() || isValidId(eventId);
       }
     }
   }

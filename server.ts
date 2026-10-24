@@ -471,6 +471,24 @@ app.post('/api/sets/:id/duplicate', (req, res) => {
 });
 
 /**
+ * 5b. DELETE /api/sets/:id - Delete question set and associated student sessions
+ */
+app.delete('/api/sets/:id', (req, res) => {
+  const setId = req.params.id;
+  const initialSetCount = questionSets.length;
+  questionSets = questionSets.filter((s) => s.id !== setId);
+  const initialSessionsCount = studentSessions.length;
+  studentSessions = studentSessions.filter((s) => s.setId !== setId);
+  teacherNotifications = teacherNotifications.filter((n) => n.setId !== setId);
+
+  return res.json({
+    success: true,
+    deletedSet: initialSetCount !== questionSets.length,
+    deletedSessionsCount: initialSessionsCount - studentSessions.length
+  });
+});
+
+/**
  * 6. GET /api/sets/by-code/:code - Lookup set by 6-char code
  */
 app.get('/api/sets/by-code/:code', (req, res) => {

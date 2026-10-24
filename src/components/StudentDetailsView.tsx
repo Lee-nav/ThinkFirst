@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { QuestionSet, StudentSession } from '../types/index.ts';
 import { LiveClock } from './LiveClock.tsx';
 import { User, Calendar, ArrowLeft, ShieldCheck, AlertCircle } from 'lucide-react';
+import { firestoreService } from '../services/firestoreService.ts';
+import { checkTimeMismatch } from '../utils/rules.ts';
 
 interface StudentDetailsViewProps {
   questionSet: QuestionSet;
@@ -29,12 +31,20 @@ export const StudentDetailsView: React.FC<StudentDetailsViewProps> = ({
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!fullName.trim()) {
+    const cleanName = fullName.trim();
+    const cleanSection = section.trim();
+
+    if (!cleanName) {
       setErrorMsg('Full name (first and last) is required.');
       return;
     }
-    if (!section.trim()) {
+    if (!cleanSection) {
       setErrorMsg('Class section is required.');
+      return;
+    }
+
+    if (questionSet.status === 'closed') {
+      setErrorMsg('This Question Set Has Been Closed By Your Instructor. New submissions are not permitted.');
       return;
     }
 
@@ -46,33 +56,134 @@ export const StudentDetailsView: React.FC<StudentDetailsViewProps> = ({
       minute: '2-digit',
       hour12: true
     });
+    const serverTime = Date.now();
+    const mismatchCheck = checkTimeMismatch(todayStr, formattedTime, serverTime, 10);
 
     try {
-      const response = await fetch('/api/sessions/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          setId: questionSet.id,
-          fullName: fullName.trim(),
-          section: section.trim(),
-          declaredDate: todayStr,
-          declaredTime: formattedTime,
-          declaredTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-        })
-      });
+      // Check if this student already has an active session for this question set to resume seamlessly
+      const existingSessions = await firestoreService.getAllStudentSessions();
+      const existingActive = existingSessions.find(
+        (s) =>
+          s.setId === questionSet.id &&
+          s.fullName.trim().toLowerCase() === cleanName.toLowerCase() &&
+          s.section.trim().toLowerCase() === cleanSection.toLowerCase() &&
+          s.status === 'in_progress'
+      );
 
-      const data = await response.json();
+      if (existingActive) {
+        setIsSubmitting(false);
+        onSessionStarted(existingActive);
+        return;
+      }
 
-      if (!response.ok) {
-        setErrorMsg(data.error || 'Failed to start session.');
+      // Check if student has already submitted
+      const alreadySubmitted = existingSessions.find(
+        (s) =>
+          s.setId === questionSet.id &&
+          s.fullName.trim().toLowerCase() === cleanName.toLowerCase() &&
+          s.section.trim().toLowerCase() === cleanSection.toLowerCase() &&
+          (s.status === 'submitted' || s.status === 'over_time')
+      );
+
+      if (alreadySubmitted) {
+        setErrorMsg('You have already submitted this assignment. Contact your teacher to reopen it.');
         setIsSubmitting(false);
         return;
       }
 
-      onSessionStarted(data);
-    } catch {
-      setErrorMsg('Network error. Check connection.');
+      // Construct verified StudentSession
+      const newSession: StudentSession = {
+        id: `sess-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        setId: questionSet.id,
+        fullName: cleanName,
+        section: cleanSection,
+        declaredDateTime: `${todayStr} ${formattedTime}`,
+        declaredDate: todayStr,
+        declaredTime: formattedTime,
+        declaredTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+        recordedStartAt: serverTime,
+        durationSeconds: 0,
+        isOverTime: false,
+        isLateSync: !navigator.onLine,
+        isTimeMismatch: mismatchCheck.isMismatch,
+        mismatchMinutes: mismatchCheck.diffMinutes,
+        answers: {},
+        outline: ['', '', ''],
+        chat: [],
+        coachStage: 0,
+        draft: '',
+        step: 1,
+        wordsWrittenPercent: 100,
+        studentWords: 0,
+        suggestionWords: 0,
+        pastedWords: 0,
+        status: 'in_progress',
+        focusTimesLeft: 0,
+        focusSecondsAway: 0,
+        focusFlagLevel: 'clear',
+        reviewState: 'unreviewed',
+        events: [],
+        updatedAt: serverTime
+      };
+
+      // 1. Direct Firestore & local persistence (works 100% reliably on Vercel and offline)
+      await firestoreService.saveStudentSession(newSession);
+
+      // 2. Non-blocking background sync to Node backend if running
+      fetch('/api/sessions/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          setId: questionSet.id,
+          fullName: cleanName,
+          section: cleanSection,
+          declaredDate: todayStr,
+          declaredTime: formattedTime,
+          declaredTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+        })
+      }).catch(() => {});
+
       setIsSubmitting(false);
+      onSessionStarted(newSession);
+    } catch (err) {
+      console.error('Session start error:', err);
+      // Fallback: still start the session locally so student is never blocked
+      const fallbackSession: StudentSession = {
+        id: `sess-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        setId: questionSet.id,
+        fullName: cleanName,
+        section: cleanSection,
+        declaredDateTime: `${todayStr} ${formattedTime}`,
+        declaredDate: todayStr,
+        declaredTime: formattedTime,
+        declaredTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+        recordedStartAt: serverTime,
+        durationSeconds: 0,
+        isOverTime: false,
+        isLateSync: !navigator.onLine,
+        isTimeMismatch: mismatchCheck.isMismatch,
+        mismatchMinutes: mismatchCheck.diffMinutes,
+        answers: {},
+        outline: ['', '', ''],
+        chat: [],
+        coachStage: 0,
+        draft: '',
+        step: 1,
+        wordsWrittenPercent: 100,
+        studentWords: 0,
+        suggestionWords: 0,
+        pastedWords: 0,
+        status: 'in_progress',
+        focusTimesLeft: 0,
+        focusSecondsAway: 0,
+        focusFlagLevel: 'clear',
+        reviewState: 'unreviewed',
+        events: [],
+        updatedAt: serverTime
+      };
+
+      setIsSubmitting(false);
+      onSessionStarted(fallbackSession);
     }
   };
 

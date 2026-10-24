@@ -1,100 +1,87 @@
-# Implementation Plan: Vercel Deployment & Question Set Creation Fix
+# Teacher Tools: Question Set Deletion
 
-## Summary of Problems & Confirmed Decisions
-1. **Vite Native ConfigLoader Warning**:
-   - Vercel build log warning: `(!) Your Vite config uses features that are unsupported by configLoader: 'native' ... Set VITE_CONFIG_NATIVE_IGNORE_WARNING=true to suppress this warning.`
-   - Cause: `vite.config.ts` used CommonJS `__dirname` in an ESM module project (`"type": "module"`).
-   - Solution: Modernize `vite.config.ts` with native `import.meta.url` / `fileURLToPath` and set `process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING = 'true'` to eliminate the warning on Vercel and local builds.
-2. **Question Set Creation & Publishing Failure on Vercel**:
-   - Cause: On Vercel, Vite static deployments build and serve the client SPA (`dist/`), but do not execute the Express Node process (`server.ts`). When the educator clicked "Publish Now" or "Save Draft", `fetch('/api/sets')` failed with 404 or returned HTML index, causing `res.json()` parse failures and falling into the `Failed to save set` error toast.
-   - Solution: Connect directly to the provisioned Firebase Firestore database (`ai-studio-thinkfirst-24af66b2-636c-40bc-8b81-f002b58fddda`) via a resilient client service (`src/services/firestoreService.ts`) with robust offline localStorage fallback. Ensure `handleCreateNewSet` saves and updates state immediately so creating and publishing question sets succeeds on Vercel, local dev, and AI Studio without server dependency.
-3. **Vercel Single-Page App (SPA) Routing**:
-   - Add `vercel.json` with SPA rewrite rules (`"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]`) to guarantee direct URLs (e.g., `/?code=CLIM88`) and refreshes resolve without 404 errors.
+Add the ability for instructors to permanently delete question sets, with clear safety confirmations, submission count warnings, and synchronized deletion across Firestore, local storage, and the backend server.
+
+### User Review & Critical Decisions
+
+> [!IMPORTANT]
+> **Confirmed Choices from Phase 1:**
+> - **Cascade Submission Handling**: Deleting a question set permanently removes the question set document and all associated student submissions and focus event logs.
+> - **Confirmation UX**: A dedicated modal dialog appears showing the question set title, access code, and the count of student submissions that will be removed.
+> - **Placement**: The delete trigger is accessible both on the Question Sets overview card toolbar and in the header action bar when inspecting a specific set's results.
 
 ---
 
-## Technical Architecture & Resilience Flow
+### 1. Overview & Core Concept
+
+- **What It Does**: Teachers can delete unused, test, or obsolete question sets directly from their dashboard. Clicking "Delete" opens a confirmation modal detailing the set's title, code, and active student submission count. Confirming permanently purges the set and its submissions from Firestore and local cache, closing out active views cleanly.
+- **Target Audience**: Teachers, instructors, and proctors managing multiple classroom assignments.
+- **Key Value**: Prevents dashboard clutter, eliminates test artifacts, and guarantees that invalidated codes cannot be submitted by students.
+
+---
+
+### 2. User Experience & Visual Design
+
+- **Delete Trigger Placement**:
+  - **Overview Card Action Bar**: Located next to "Duplicate" and "Close/Reopen Set" with a subtle red/danger hover state (`text-[var(--mut)] hover:text-red-500 hover:underline`).
+  - **Set Detail View Header**: Positioned beside "Export CSV" and "Regenerate Code" as an icon+text button (`border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20`).
+- **Confirmation Modal (`DeleteQuestionSetModal.tsx`)**:
+  - Centered dialog with backdrop blur and focus trap.
+  - Prominent red warning banner with `AlertTriangle` icon.
+  - Clear summary box displaying:
+    - Set title and 6-character access code.
+    - Total student submissions to be deleted (highlighted in bold with an explicit notice that student grades and focus logs will also be permanently removed).
+  - Two action buttons:
+    - Secondary: "Cancel" (dismisses modal, no state changes).
+    - Primary: "Delete Set & Submissions" (styled with danger red background, loading spinner state during async deletion).
+- **Interactive Feedback**:
+  - Success toast upon completion: `"Question set and X submissions deleted"`.
+  - If viewing the deleted set's detail page, automatically transitions back to the main question sets list tab.
+
+---
+
+### 3. Key Product Decisions & Trade-Offs
+
+- **Decision 1: Full Cascade Deletion vs. Soft Archive**
+  - *Chosen Approach*: Cascade deletion removing both the question set and its student sessions.
+  - *Why*: Directly aligns with user requirements; avoids orphaned submissions in the submissions table and guarantees access codes are fully freed.
+  - *Alternatives Considered*: Soft-archive flag (`status: 'deleted'`). Passed over because instructors want an unambiguous deletion that cleans up database state.
+- **Decision 2: Dedicated Modal vs. Inline Confirmation Button**
+  - *Chosen Approach*: Modal dialog with detailed submission count warning.
+  - *Why*: Deleting submissions is irreversible; a modal prevents accidental clicks and allows space to inform teachers of how many students are affected.
+
+---
+
+### 4. Technical Architecture & Data Strategy
 
 ```
-+-----------------------------------------------------------------------------------------+
-|                                    ThinkFirst Client                                    |
-|   - Teacher creates & publishes question set in CreateQuestionSetModal                  |
-|   - handleCreateNewSet(setData, publishNow)                                             |
-+-----------------------------------------------------------------------------------------+
-                                             |
-                      +----------------------+----------------------+
-                      |                                             |
-                      v                                             v
-        [ Primary: Firestore Service ]               [ Fallback: Local Storage ]
-        - Initializes firebase/firestore              - Mirrors active sets & sessions
-        - Direct setDoc to /questionSets/{id}         - Provides immediate optimistic write
-        - Real-time cloud persistence across devices  - Prevents any publish failures
-                      |                                             |
-                      +----------------------+----------------------+
-                                             |
-                                             v
-                               [ Instant UI Update & Toast ]
-                               - New Set with 6-char code active
-                               - Displays in Teacher Dashboard
-                               - Accessible to Students by Code
+┌─────────────────────────────────────────────────────────────┐
+│                   Teacher Dashboard View                     │
+│  ┌───────────────────────┐       ┌───────────────────────┐  │
+│  │  Question Set Card     │       │ Set Detail Header     │  │
+│  │  [Delete Set] button   │       │ [Delete Set] button   │  │
+│  └───────────┬───────────┘       └───────────┬───────────┘  │
+│              │                               │              │
+│              └───────────────┬───────────────┘              │
+│                              ▼                              │
+│               DeleteQuestionSetModal (Confirm)              │
+│                              │                              │
+│                              ▼                              │
+│                   App.tsx: handleDeleteSet                  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+               ┌───────────────┴───────────────┐
+               ▼                               ▼
+     firestoreService.ts               server.ts (Proxy)
+  • deleteQuestionSet(setId)        • DELETE /api/sets/:id
+  • deleteSessionsForSet(setId)     • In-memory purge
+  • localStorage cache purge
 ```
 
----
-
-## Detailed Implementation Steps
-
-### 1. Modernize `vite.config.ts` & Add `vercel.json`
-- **`vite.config.ts`**:
-  - Replace `path.resolve(__dirname, '.')` with `fileURLToPath(new URL('.', import.meta.url))` to support native ESM.
-  - Set `process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING = 'true'` in the config header to suppress future warnings.
-- **`vercel.json`**:
-  - Create `vercel.json` in root:
-    ```json
-    {
-      "rewrites": [
-        { "source": "/(.*)", "destination": "/index.html" }
-      ]
-    }
-    ```
-
-### 2. Direct Firestore Service with Offline Fallback (`src/services/firestoreService.ts`)
-- Use existing `firebase-applet-config.json` credentials to initialize Firebase client SDK (`firebase/firestore`).
-- Implement helper methods:
-  - `saveQuestionSet(set: QuestionSet): Promise<QuestionSet>`
-  - `getQuestionSets(): Promise<QuestionSet[]>`
-  - `updateQuestionSetStatus(setId: string, status: 'open' | 'closed'): Promise<void>`
-  - `regenerateQuestionSetCode(setId: string, newCode: string): Promise<void>`
-  - `getQuestionSetByCode(code: string): Promise<QuestionSet | null>`
-  - `saveStudentSession(session: StudentSession): Promise<StudentSession>`
-  - `getAllStudentSessions(): Promise<StudentSession[]>`
-- **Offline / Standalone Fallback**: Wrap all Firestore operations with try/catch and an in-memory / `localStorage` mirror (`thinkfirst_sets_cache`, `thinkfirst_sessions_cache`). If network is down or Firestore is unavailable, local storage stores the set, ensuring 100% reliable execution.
-
-### 3. Update `App.tsx` Handlers
-- Update `handleCreateNewSet`:
-  - Generate a 6-character uppercase access code (`generateAccessCode()`).
-  - Assemble full `QuestionSet` object with UUID and timestamps.
-  - Call `firestoreService.saveQuestionSet(newSet)`.
-  - Also call `/api/sets` if running in hybrid fullstack mode, but do not throw if `/api` returns 404 (on Vercel).
-  - Update `activeQuestionSets` state immediately.
-  - Trigger success toast (`Set published! Access code: ${newSet.code}`).
-- Update `refreshQuestionSets`:
-  - Load from Firestore (or fallback cache if offline), populating the sets on page load.
-- Update `handleRegenerateCode`, `handleToggleSetStatus`, and `handleDuplicateSet` to sync with Firestore and local state.
-
----
-
-## Verification & Testing Plan
-
-1. **Vite Warning Verification**:
-   - Run `npm run build` / `compile_applet`.
-   - Verify that the `configLoader: 'native'` warning is eliminated.
-2. **Question Set Creation & Publishing**:
-   - Open Teacher Dashboard -> Click "+ Create Set".
-   - Fill in Title, Set Type (Report/Question/Reflection), Prompts, and Time Limit.
-   - Click "Publish Now".
-   - Verify set is created immediately, assigned a 6-digit access code, rendered on the dashboard, and toast shows `"Set published! Access code: ..."` without failure.
-3. **Student Code Entry**:
-   - Switch to Student Demo -> Enter the generated access code.
-   - Verify the assignment loads seamlessly.
-4. **Build & Lint Verification**:
-   - Run `lint_applet` and `compile_applet` to confirm zero TypeScript or build errors.
+- **Persistence Layer (`src/services/firestoreService.ts`)**:
+  - `deleteQuestionSet(setId: string)`: Deletes doc from Firestore `questionSets/{setId}` and removes from local cache.
+  - `deleteSessionsForSet(setId: string)`: Deletes matching documents from `studentSessions` and removes from cached sessions.
+- **Backend API (`server.ts`)**:
+  - `DELETE /api/sets/:id`: Removes the set and associated student sessions from in-memory arrays and sends a 200 OK.
+- **Component State Flow (`App.tsx` & `TeacherDashboardView.tsx`)**:
+  - `handleDeleteSet(setId: string)`: Executes Firestore and backend deletion, updates `activeQuestionSets`, `allTeacherSessions`, and `teacherSetSessions` states, clears `selectedSetForTeacher` if it matches the deleted set, and displays a confirmation toast.

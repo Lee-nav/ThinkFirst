@@ -226,13 +226,17 @@ export default function App() {
   // When teacher selects a question set, fetch its student sessions
   useEffect(() => {
     if (!selectedSetForTeacher) return;
+    // Immediate fallback from allTeacherSessions so Vercel deployment shows submissions instantly
+    const matching = allTeacherSessions.filter((s) => s.setId === selectedSetForTeacher.id);
+    setTeacherSetSessions(matching);
+
     fetch(`/api/sets/${selectedSetForTeacher.id}/sessions`)
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data)) setTeacherSetSessions(data);
+        if (Array.isArray(data) && data.length > 0) setTeacherSetSessions(data);
       })
       .catch(() => {});
-  }, [selectedSetForTeacher]);
+  }, [selectedSetForTeacher, allTeacherSessions]);
 
   // Focus Integrity tracking hook
   const isFocusMonitoringActive =
@@ -703,12 +707,52 @@ export default function App() {
 
   const handleReopenStudentSession = async (sessionIdToReopen: string) => {
     try {
-      await fetch(`/api/teacher/sessions/${sessionIdToReopen}/reopen`, { method: 'POST' });
-      setTeacherSetSessions((prev) =>
-        prev.map((s) => (s.id === sessionIdToReopen ? { ...s, status: 'in_progress' } : s))
-      );
+      const allSessions = await firestoreService.getAllStudentSessions();
+      const target = allSessions.find((s) => s.id === sessionIdToReopen);
+      if (target) {
+        const updated: StudentSession = { ...target, status: 'in_progress', updatedAt: Date.now() };
+        await firestoreService.saveStudentSession(updated);
+        setAllTeacherSessions((prev) => prev.map((s) => (s.id === sessionIdToReopen ? updated : s)));
+        setTeacherSetSessions((prev) => prev.map((s) => (s.id === sessionIdToReopen ? updated : s)));
+      }
+      fetch(`/api/teacher/sessions/${sessionIdToReopen}/reopen`, { method: 'POST' }).catch(() => {});
       showToast('Session reopened for student');
     } catch {}
+  };
+
+  const handleDeleteSet = async (setId: string) => {
+    try {
+      // 1. Delete associated student sessions from Firestore & local storage
+      const deletedSessionsCount = await firestoreService.deleteSessionsForSet(setId);
+      // 2. Delete question set from Firestore & local storage
+      await firestoreService.deleteQuestionSet(setId);
+
+      // 3. Update React states
+      setActiveQuestionSets((prev) => prev.filter((s) => s.id !== setId));
+      setAllTeacherSessions((prev) => prev.filter((s) => s.setId !== setId));
+      setTeacherSetSessions((prev) => prev.filter((s) => s.setId !== setId));
+      setTeacherNotifications((prev) => prev.filter((n) => n.setId !== setId));
+
+      // 4. Reset selected set views if currently pointing to deleted set
+      if (selectedSetForTeacher?.id === setId) {
+        setSelectedSetForTeacher(null);
+      }
+      if (activeSetForStudent?.id === setId) {
+        setActiveSetForStudent(null);
+      }
+
+      // 5. Background sync to Node server
+      fetch(`/api/sets/${setId}`, { method: 'DELETE' }).catch(() => {});
+
+      showToast(
+        deletedSessionsCount > 0
+          ? `Question set and ${deletedSessionsCount} submission${deletedSessionsCount === 1 ? '' : 's'} deleted`
+          : 'Question set deleted'
+      );
+    } catch (err) {
+      console.error('Failed to delete question set:', err);
+      showToast('Failed to delete question set');
+    }
   };
 
   // Primary CTA content for NavigationDock
@@ -1055,6 +1099,7 @@ export default function App() {
             onBackToSetsList={() => setSelectedSetForTeacher(null)}
             onExportSetCSV={handleExportSetCSV}
             onReopenStudentSession={handleReopenStudentSession}
+            onDeleteSet={handleDeleteSet}
             activeTeacherTab={activeTeacherTab}
             onTeacherTabChange={setActiveTeacherTab}
           />
