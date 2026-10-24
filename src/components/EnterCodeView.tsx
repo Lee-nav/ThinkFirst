@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { normalizeAccessCode } from '../utils/rules.ts';
 import { QuestionSet } from '../types/index.ts';
+import { firestoreService } from '../services/firestoreService.ts';
 import { KeyRound, AlertCircle, Clock, ArrowRight, ArrowLeft } from 'lucide-react';
 
 interface EnterCodeViewProps {
@@ -57,23 +58,35 @@ export const EnterCodeView: React.FC<EnterCodeViewProps> = ({
     setErrorMsg(null);
 
     try {
-      const response = await fetch(`/api/sets/by-code/${clean}`);
-      const data = await response.json();
-
-      if (!response.ok) {
-        const nextFailed = failedAttempts + 1;
-        setFailedAttempts(nextFailed);
-        if (nextFailed >= 5) {
-          setLockoutSecondsRemaining(60);
-          setErrorMsg('Too many tries. Please wait 60 seconds.');
-        } else {
-          setErrorMsg(data.error || 'This code does not work. Check it with your teacher.');
+      // 1. Check direct Firestore service & local cache (works offline and on Vercel)
+      const found = await firestoreService.getQuestionSetByCode(clean);
+      if (found) {
+        if (found.status === 'closed') {
+          setErrorMsg('This question set is now closed. Check it with your teacher.');
+          setIsLoading(false);
+          return;
         }
-        setIsLoading(false);
+        onCodeVerified(found);
         return;
       }
 
-      onCodeVerified(data);
+      // 2. Check fullstack server endpoint if available
+      const response = await fetch(`/api/sets/by-code/${clean}`);
+      if (response.ok) {
+        const data = await response.json();
+        onCodeVerified(data);
+        return;
+      }
+
+      const nextFailed = failedAttempts + 1;
+      setFailedAttempts(nextFailed);
+      if (nextFailed >= 5) {
+        setLockoutSecondsRemaining(60);
+        setErrorMsg('Too many tries. Please wait 60 seconds.');
+      } else {
+        setErrorMsg('This code does not work. Check it with your teacher.');
+      }
+      setIsLoading(false);
     } catch {
       setErrorMsg('This code does not work. Check it with your teacher.');
       setIsLoading(false);

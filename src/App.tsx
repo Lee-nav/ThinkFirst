@@ -47,6 +47,7 @@ import { LandingPageView } from './components/LandingPageView.tsx';
 import { AuthModal } from './components/AuthModal.tsx';
 import { useAuth } from './context/AuthContext.tsx';
 import { UserRole } from './types/auth.ts';
+import { firestoreService } from './services/firestoreService.ts';
 
 const STORAGE_KEY = 'thinkfirst_v3';
 const HINT_SENTENCE_STARTERS = [
@@ -141,20 +142,34 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 2500);
   }, []);
 
-  // Fetch initial sets, notifications, and all sessions from backend
+  // Fetch initial sets, notifications, and all sessions from Firestore & backend
   const refreshQuestionSets = useCallback(async () => {
     try {
-      const res = await fetch('/api/sets');
-      const data = await res.json();
-      if (Array.isArray(data)) setActiveQuestionSets(data);
+      const sets = await firestoreService.getQuestionSets();
+      if (Array.isArray(sets) && sets.length > 0) {
+        setActiveQuestionSets(sets);
+      }
+      fetch('/api/sets')
+        .then((r) => r.json())
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) setActiveQuestionSets(data);
+        })
+        .catch(() => {});
     } catch {}
   }, []);
 
   const refreshAllTeacherSessions = useCallback(async () => {
     try {
-      const res = await fetch('/api/teacher/all-sessions');
-      const data = await res.json();
-      if (Array.isArray(data)) setAllTeacherSessions(data);
+      const sessions = await firestoreService.getAllStudentSessions();
+      if (Array.isArray(sessions) && sessions.length > 0) {
+        setAllTeacherSessions(sessions);
+      }
+      fetch('/api/teacher/all-sessions')
+        .then((r) => r.json())
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) setAllTeacherSessions(data);
+        })
+        .catch(() => {});
     } catch {}
   }, []);
 
@@ -286,6 +301,8 @@ export default function App() {
   };
 
   const handleStartSessionWithDetails = (session: StudentSession) => {
+    firestoreService.saveStudentSession(session);
+    setAllTeacherSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)]);
     setActiveStudentSession(session);
     setSessionId(session.id);
     setTopic(activeSetForStudent?.title || '');
@@ -312,6 +329,33 @@ export default function App() {
   const handleSubmitActiveSession = async () => {
     const currentSessionId = activeStudentSession?.id || sessionId;
     const isLateSync = !navigator.onLine;
+    const serverFinishTime = Date.now();
+    const durationSec = Math.max(
+      1,
+      Math.round((serverFinishTime - (activeStudentSession?.recordedStartAt || Date.now() - 900000)) / 1000)
+    );
+    const targetSet = activeSetForStudent;
+    const isOver = durationSec > (targetSet?.timeLimitMinutes || 15) * 60;
+
+    if (activeStudentSession) {
+      const updatedSess: StudentSession = {
+        ...activeStudentSession,
+        finishedAt: serverFinishTime,
+        durationSeconds: durationSec,
+        isOverTime: isOver,
+        status: isOver ? 'over_time' : 'submitted',
+        answers: questionAnswers,
+        draft: draftText,
+        outline,
+        wordsWrittenPercent: sessionResult?.percentYourWords || 92,
+        focusTimesLeft: focusStatus.leavesCount,
+        focusSecondsAway: focusStatus.totalSecondsAway,
+        focusFlagLevel: focusStatus.level,
+        updatedAt: serverFinishTime
+      };
+      await firestoreService.saveStudentSession(updatedSess);
+      setAllTeacherSessions((prev) => [updatedSess, ...prev.filter((s) => s.id !== updatedSess.id)]);
+    }
 
     try {
       const response = await fetch(`/api/sessions/${currentSessionId}/submit`, {
@@ -331,30 +375,31 @@ export default function App() {
         setSubmissionReceipt(data.receipt);
         navigateTo('receipt');
         refreshQuestionSets();
+        return;
       }
-    } catch {
-      // Local fallback receipt if offline
-      const receiptFallback = {
-        id: currentSessionId,
-        fullName: activeStudentSession?.fullName || 'You',
-        section: activeStudentSession?.section || 'General',
-        setTitle: activeSetForStudent?.title || 'Assignment',
-        code: activeSetForStudent?.code || '',
-        recordedStartAt: activeStudentSession?.recordedStartAt || Date.now() - 900000,
-        finishedAt: Date.now(),
-        durationSeconds: 900,
-        durationFormatted: '15m',
-        timeLimitMinutes: activeSetForStudent?.timeLimitMinutes || 15,
-        withinLimit: true,
-        focusTimesLeft: focusStatus.leavesCount,
-        focusSecondsAway: focusStatus.totalSecondsAway,
-        focusFlagLevel: focusStatus.level,
-        wordsWrittenPercent: 95,
-        isFlagged: focusStatus.level === 'flagged'
-      };
-      setSubmissionReceipt(receiptFallback);
-      navigateTo('receipt');
-    }
+    } catch {}
+
+    // Local fallback receipt if offline or on Vercel static deployment
+    const receiptFallback = {
+      id: currentSessionId,
+      fullName: activeStudentSession?.fullName || 'You',
+      section: activeStudentSession?.section || 'General',
+      setTitle: activeSetForStudent?.title || 'Assignment',
+      code: activeSetForStudent?.code || '',
+      recordedStartAt: activeStudentSession?.recordedStartAt || Date.now() - 900000,
+      finishedAt: Date.now(),
+      durationSeconds: durationSec,
+      durationFormatted: formatDuration(durationSec),
+      timeLimitMinutes: activeSetForStudent?.timeLimitMinutes || 15,
+      withinLimit: !isOver,
+      focusTimesLeft: focusStatus.leavesCount,
+      focusSecondsAway: focusStatus.totalSecondsAway,
+      focusFlagLevel: focusStatus.level,
+      wordsWrittenPercent: sessionResult?.percentYourWords || 92,
+      isFlagged: focusStatus.level === 'flagged'
+    };
+    setSubmissionReceipt(receiptFallback);
+    navigateTo('receipt');
   };
 
   // Personal mode start thinking
@@ -514,87 +559,121 @@ export default function App() {
     navigateTo('summary');
   };
 
-  // Teacher actions
+  // Teacher actions with direct Firestore & offline persistence
   const handleCreateNewSet = async (setData: Partial<QuestionSet>, publishNow: boolean) => {
     try {
-      const res = await fetch('/api/sets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(setData)
-      });
-      const created = await res.json();
-      setActiveQuestionSets((prev) => [created, ...prev]);
-      showToast(publishNow ? `Set published! Access code: ${created.code}` : 'Draft saved');
-    } catch {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let autoCode = '';
+      for (let i = 0; i < 6; i++) autoCode += chars.charAt(Math.floor(Math.random() * chars.length));
+
+      const newSet: QuestionSet = {
+        id: setData.id || `set-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        teacherId: user?.id || 'teacher-reyes',
+        teacherEmail: user?.email || 'elena.reyes@school.edu',
+        teacherName: user?.fullName || 'Ms. Elena Reyes',
+        title: setData.title || 'Untitled Question Set',
+        type: setData.type || 'Report',
+        prompts: setData.prompts && setData.prompts.length > 0 ? setData.prompts : [setData.title || 'Assignment Prompt'],
+        instructions: setData.instructions || '',
+        timeLimitMinutes: setData.timeLimitMinutes || 15,
+        openAt: setData.openAt || '',
+        closeAt: setData.closeAt || '',
+        sectionsAllowed: setData.sectionsAllowed || [],
+        focusMonitoring: setData.focusMonitoring ?? true,
+        timeUpRule: setData.timeUpRule || 'over_time',
+        coachEnabled: setData.coachEnabled ?? true,
+        status: publishNow ? 'open' : 'draft',
+        code: setData.code || autoCode,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        submissionCount: 0
+      };
+
+      // 1. Direct Firestore & local cache persistence (works on Vercel and offline)
+      await firestoreService.saveQuestionSet(newSet);
+      setActiveQuestionSets((prev) => [newSet, ...prev.filter((s) => s.id !== newSet.id)]);
+
+      // 2. Background sync to Node server if running
+      try {
+        fetch('/api/sets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newSet)
+        }).catch(() => {});
+      } catch {}
+
+      showToast(publishNow ? `Set published! Access code: ${newSet.code}` : 'Draft saved');
+    } catch (err) {
+      console.error('Failed to save set:', err);
       showToast('Failed to save set');
     }
   };
 
   const handleDuplicateSet = async (setId: string) => {
     try {
-      const res = await fetch(`/api/sets/${setId}/duplicate`, { method: 'POST' });
-      const dup = await res.json();
+      const source = activeQuestionSets.find((s) => s.id === setId);
+      if (!source) return;
+
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let newCode = '';
+      for (let i = 0; i < 6; i++) newCode += chars.charAt(Math.floor(Math.random() * chars.length));
+
+      const dup = await firestoreService.duplicateQuestionSet(source, newCode);
       setActiveQuestionSets((prev) => [dup, ...prev]);
+
+      fetch(`/api/sets/${setId}/duplicate`, { method: 'POST' }).catch(() => {});
       showToast('Set duplicated');
     } catch {}
   };
 
   const handleToggleSetStatus = async (setId: string, nextStatus: 'open' | 'closed') => {
     try {
-      await fetch(`/api/sets/${setId}`, {
+      await firestoreService.updateQuestionSetStatus(setId, nextStatus);
+      setActiveQuestionSets((prev) =>
+        prev.map((s) => (s.id === setId ? { ...s, status: nextStatus, updatedAt: Date.now() } : s))
+      );
+      if (selectedSetForTeacher?.id === setId) {
+        setSelectedSetForTeacher((prev) => (prev ? { ...prev, status: nextStatus, updatedAt: Date.now() } : null));
+      }
+
+      fetch(`/api/sets/${setId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: nextStatus })
-      });
-      setActiveQuestionSets((prev) =>
-        prev.map((s) => (s.id === setId ? { ...s, status: nextStatus } : s))
-      );
-      if (selectedSetForTeacher?.id === setId) {
-        setSelectedSetForTeacher((prev) => (prev ? { ...prev, status: nextStatus } : null));
-      }
+      }).catch(() => {});
       showToast(`Set marked as ${nextStatus}`);
     } catch {}
   };
 
   const handleRegenerateCode = async (setId: string) => {
     try {
-      const res = await fetch(`/api/sets/${setId}/code/regenerate`, { method: 'POST' });
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
       let newCode = '';
-      if (res.ok) {
-        const data = await res.json();
-        newCode = data.code;
-      }
-      if (!newCode) {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-        for (let i = 0; i < 6; i++) newCode += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
+      for (let i = 0; i < 6; i++) newCode += chars.charAt(Math.floor(Math.random() * chars.length));
+
+      try {
+        const res = await fetch(`/api/sets/${setId}/code/regenerate`, { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.code) newCode = data.code;
+        }
+      } catch {}
+
+      await firestoreService.regenerateQuestionSetCode(setId, newCode);
 
       setActiveQuestionSets((prev) =>
-        prev.map((s) => (s.id === setId ? { ...s, code: newCode } : s))
+        prev.map((s) => (s.id === setId ? { ...s, code: newCode, updatedAt: Date.now() } : s))
       );
       if (qrCodeSet?.id === setId) {
-        setQrCodeSet((prev) => (prev ? { ...prev, code: newCode } : null));
+        setQrCodeSet((prev) => (prev ? { ...prev, code: newCode, updatedAt: Date.now() } : null));
       }
       if (selectedSetForTeacher?.id === setId) {
-        setSelectedSetForTeacher((prev) => (prev ? { ...prev, code: newCode } : null));
+        setSelectedSetForTeacher((prev) => (prev ? { ...prev, code: newCode, updatedAt: Date.now() } : null));
       }
       showToast(`New code generated: ${newCode}`);
       return newCode;
     } catch {
-      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-      let fallbackCode = '';
-      for (let i = 0; i < 6; i++) fallbackCode += chars.charAt(Math.floor(Math.random() * chars.length));
-      setActiveQuestionSets((prev) =>
-        prev.map((s) => (s.id === setId ? { ...s, code: fallbackCode } : s))
-      );
-      if (qrCodeSet?.id === setId) {
-        setQrCodeSet((prev) => (prev ? { ...prev, code: fallbackCode } : null));
-      }
-      if (selectedSetForTeacher?.id === setId) {
-        setSelectedSetForTeacher((prev) => (prev ? { ...prev, code: fallbackCode } : null));
-      }
-      showToast(`New code generated: ${fallbackCode}`);
-      return fallbackCode;
+      showToast('Failed to regenerate code');
     }
   };
 

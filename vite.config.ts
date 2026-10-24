@@ -1,14 +1,20 @@
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig } from 'vite';
+
+// Suppress Vite configLoader 'native' migration warning on Vercel and modern runtimes
+process.env.VITE_CONFIG_NATIVE_IGNORE_WARNING = 'true';
+
+const rootDir = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(rootDir, '.'),
       },
     },
     server: {
