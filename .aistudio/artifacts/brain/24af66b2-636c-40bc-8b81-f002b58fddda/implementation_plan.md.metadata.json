@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for fixing access code regeneration with in-app confirmation and establishing strict role isolation between Student and Teacher views with a top-pill one-click switcher and dedicated teacher navigation bar.",
+  "updatedAt":  "2026-10-24T11:28:41.269019093Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

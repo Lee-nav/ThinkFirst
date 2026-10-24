@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (default deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Question Sets collection
+    match /questionSets/{setId} {
+      allow get: if isValidId(setId);
+      allow list: if true;
+      allow create: if isSignedIn() || request.resource.data.teacherId != null;
+      allow update: if isSignedIn() || resource.data.teacherId == request.resource.data.teacherId;
+      allow delete: if isSignedIn();
+    }
+
+    // Student Sessions collection
+    match /studentSessions/{sessionId} {
+      allow get: if isValidId(sessionId);
+      allow list: if true;
+      allow create: if isValidId(sessionId) && request.resource.data.setId is string;
+      allow update: if isValidId(sessionId);
+      allow delete: if isSignedIn();
+
+      // Nested Focus Events subcollection
+      match /focusEvents/{eventId} {
+        allow get, list: if isValidId(sessionId);
+        allow create: if isValidId(eventId) && request.resource.data.sessionId == sessionId;
+        allow update, delete: if false;
+      }
+    }
+  }
+}

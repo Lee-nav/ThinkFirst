@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "questionSet": {
+      "title": "QuestionSet",
+      "description": "A set of questions or writing prompts created by a teacher with time limits and access code.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "teacherEmail": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "title": { "type": "string", "maxLength": 200 },
+        "type": { "type": "string", "enum": ["Report", "Reflection", "Question"] },
+        "prompts": { "type": "array" },
+        "instructions": { "type": "string", "maxLength": 2000 },
+        "timeLimitMinutes": { "type": "number" },
+        "openAt": { "type": "string" },
+        "closeAt": { "type": "string" },
+        "sectionsAllowed": { "type": "array" },
+        "focusMonitoring": { "type": "boolean" },
+        "timeUpRule": { "type": "string", "enum": ["over_time", "auto_submit"] },
+        "coachEnabled": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["draft", "open", "closed"] },
+        "code": { "type": "string", "maxLength": 10 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "teacherId", "title", "type", "status", "code"]
+    },
+    "studentSession": {
+      "title": "StudentSession",
+      "description": "A student's timed submission record for a teacher question set.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "setId": { "type": "string" },
+        "fullName": { "type": "string", "maxLength": 120 },
+        "section": { "type": "string", "maxLength": 60 },
+        "declaredDateTime": { "type": "string", "maxLength": 80 },
+        "declaredTimeZone": { "type": "string", "maxLength": 80 },
+        "recordedStartAt": { "type": "number" },
+        "finishedAt": { "type": "number" },
+        "deviceFinishTime": { "type": "number" },
+        "durationSeconds": { "type": "number" },
+        "isOverTime": { "type": "boolean" },
+        "isLateSync": { "type": "boolean" },
+        "isTimeMismatch": { "type": "boolean" },
+        "answers": { "type": "object" },
+        "outline": { "type": "array" },
+        "draft": { "type": "string", "maxLength": 10000 },
+        "wordsWrittenPercent": { "type": "number" },
+        "studentWords": { "type": "number" },
+        "suggestionWords": { "type": "number" },
+        "pastedWords": { "type": "number" },
+        "status": { "type": "string", "enum": ["not_started", "in_progress", "submitted", "over_time"] },
+        "focusTimesLeft": { "type": "number" },
+        "focusSecondsAway": { "type": "number" },
+        "focusFlagLevel": { "type": "string", "enum": ["clear", "notice", "flagged"] },
+        "studentNote": { "type": "string", "maxLength": 300 },
+        "reviewState": { "type": "string", "enum": ["unreviewed", "reviewed_ok", "concern"] }
+      },
+      "required": ["id", "setId", "fullName", "section", "status"]
+    },
+    "focusEvent": {
+      "title": "FocusEvent",
+      "description": "A focus integrity leave, paste, or note event recorded during student answering.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "type": { "type": "string", "enum": ["left", "returned", "paste", "burst", "second_session", "note"] },
+        "step": { "type": "number" },
+        "serverTime": { "type": "number" },
+        "deviceTime": { "type": "number" },
+        "secondsAway": { "type": "number" },
+        "wordsPasted": { "type": "number" },
+        "wordsAddedAfterReturn": { "type": "number" },
+        "noteText": { "type": "string", "maxLength": 300 },
+        "isLate": { "type": "boolean" }
+      },
+      "required": ["id", "sessionId", "type", "serverTime"]
+    }
+  },
+  "firestore": {
+    "/questionSets/{setId}": {
+      "schema": { "$ref": "#/entities/questionSet" },
+      "description": "Collection of teacher question sets with configuration and access codes."
+    },
+    "/studentSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/studentSession" },
+      "description": "Collection of student session records and progress."
+    },
+    "/studentSessions/{sessionId}/focusEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/focusEvent" },
+      "description": "Subcollection of focus events for a student session."
+    }
+  }
+}

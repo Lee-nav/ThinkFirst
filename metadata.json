@@ -1,0 +1,6 @@
+{
+  "name": "ThinkFirst",
+  "description": "Do The Thinking First. A student writing coach website with focus integrity and teacher supervision.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

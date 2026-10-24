@@ -1,0 +1,23 @@
+{
+  "name": "ThinkFirst",
+  "short_name": "ThinkFirst",
+  "description": "Do the thinking first. A student writing coach that guides thinking without writing text for you.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F5F1E8",
+  "theme_color": "#1F7A5C",
+  "icons": [
+    {
+      "src": "/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
